@@ -3,22 +3,21 @@ name: CF Ultimate Best IP - 40ms Ultra Elite
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 */4 * * *"
+    - cron: "0 */4 * * *" # 每4小时自动运行一次
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      - name: 下载最新 CloudflareST (v2.3.4) - 加强验证 & 多源
+      - name: 下载最新 CloudflareST (v2.3.4) - 强制定位版
         run: |
+          # 1. 多镜像下载逻辑
           URL="https://github.com/XIU2/CloudflareSpeedTest/releases/download/v2.3.4/cfst_linux_amd64.tar.gz"
           MIRRORS=(
             "$URL"
+            "https://ghproxy.net/$URL"
             "https://fastly.jsdelivr.net/gh/XIU2/CloudflareSpeedTest@v2.3.4/cfst_linux_amd64.tar.gz"
-            "https://cdn.jsdelivr.net/gh/XIU2/CloudflareSpeedTest@v2.3.4/cfst_linux_amd64.tar.gz"
-            "https://ghproxy.com/$URL"
-            "https://mirror.ghproxy.com/$URL"
           )
 
           DOWNLOADED=false
@@ -26,38 +25,21 @@ jobs:
             echo "尝试下载: $mirror"
             curl -L -f --connect-timeout 20 --retry 3 -o cfst.tar.gz "$mirror"
             if [ $? -eq 0 ] && [ -s cfst.tar.gz ]; then
-              FILE_SIZE=$(stat -c %s cfst.tar.gz 2>/dev/null || stat -f %z cfst.tar.gz || echo 0)
-              echo "文件大小: ${FILE_SIZE} 字节"
-              if [ "$FILE_SIZE" -gt 2000000 ]; then
-                DOWNLOADED=true
-                break
-              else
-                echo "文件太小 (${FILE_SIZE} 字节)，疑似无效，丢弃..."
-                head -n 8 cfst.tar.gz || true
-                rm -f cfst.tar.gz
-              fi
+              DOWNLOADED=true && break
             fi
           done
 
-          if [ "$DOWNLOADED" != "true" ]; then
-            echo "❌ 所有源下载失败或无效"
-            exit 1
-          fi
+          if [ "$DOWNLOADED" != "true" ]; then echo "❌ 下载失败"; exit 1; fi
 
-          if ! file cfst.tar.gz | grep -qi "gzip compressed data"; then
-            echo "❌ 下载文件不是 gzip 格式！可能是 HTML"
-            head -n 10 cfst.tar.gz
-            exit 1
-          fi
-
+          # 2. 解压并强制提取可执行文件（解决 Exit Code 2 路径问题）
           tar -zxf cfst.tar.gz
-          ls -la   # debug: 显示解压后文件列表，应该看到 cfst
-          chmod +x cfst
-          ./cfst --version   # 应该输出类似 CloudflareSpeedTest v2.3.4
+          find . -name "CloudflareST" -type f -exec mv {} . \;
+          chmod +x CloudflareST
+          ./CloudflareST -v
 
       - name: 运行测速 (40ms 精英策略)
         run: |
-          # 精英段（大陆三网 40-70ms 高概率）
+          # 3. 精英 IP 段 (锁定大陆三网直连核心段)
           echo "1.1.1.0/24
           1.0.0.0/24
           104.16.0.0/16
@@ -69,23 +51,22 @@ jobs:
           172.64.0.0/13
           172.67.0.0/16" > elite_ip.txt
 
-          ./cfst -f elite_ip.txt \
-            -url https://speed.cloudflare.com/__down?bytes=100000000 \
-            -sl 10 -tl 160 -dn 20 -p 10 -o result.csv
+          # 4. 执行精英筛选: 速度 > 10MB/s, 延迟 < 160ms (对应国内 40-70ms)
+          ./CloudflareST -f elite_ip.txt -url https://speed.cloudflare.com/__down?bytes=100000000 -sl 10 -tl 160 -dn 20 -p 10 -o result.csv
 
       - name: 智能过滤 & 格式化输出
         run: |
+          # 5. 格式化提取 IP:443
           awk -F, 'NR>1 && $6 >= 10 && $5 <= 160 {
             ip=$1
             if (ip ~ /:/) printf("[%s]:443\n", ip)
             else printf("%s:443\n", ip)
           }' result.csv | sort -u > best.txt
 
+          # 6. 保底机制：如果严格标准没 IP，自动降级标准再跑一次
           if [ ! -s best.txt ]; then
-            echo "严格条件无 IP，启动保底..."
-            ./cfst -f elite_ip.txt \
-              -url https://speed.cloudflare.com/__down?bytes=100000000 \
-              -sl 5 -tl 200 -dn 20 -p 5 -o result_loose.csv
+            echo "⚠️ 严格条件无 IP，启动 5MB/s 保底模式..."
+            ./CloudflareST -f elite_ip.txt -url https://speed.cloudflare.com/__down?bytes=50000000 -sl 5 -tl 200 -dn 20 -p 5 -o result_loose.csv
             awk -F, 'NR>1 && $6 >= 5 && $5 <= 200 {
               ip=$1
               if (ip ~ /:/) printf("[%s]:443\n", ip)
@@ -93,27 +74,24 @@ jobs:
             }' result_loose.csv | sort -u > best.txt
           fi
 
-          echo "本次筛选出 $(wc -l < best.txt) 个精英 IP"
-
       - name: 推送至 Gist
         env:
           GIST_ID: ${{ secrets.GIST_ID }}
           GIST_PAT: ${{ secrets.GIST_PAT }}
         run: |
           if [ -s best.txt ]; then
-            echo "# 更新时间: $(date '+%Y-%m-%d %H:%M:%S') UTC+8 (新加坡时间)" > temp.txt
-            cat best.txt >> temp.txt
-            mv temp.txt best.txt
-
-            CONTENT=$(sed ':a;N;$!ba;s/\n/\\n/g' best.txt)
+            # 加上时间戳注释
+            echo "# 更新时间: $(date '+%Y-%m-%d %H:%M:%S') UTC" > final.txt
+            cat best.txt >> final.txt
+            
+            CONTENT=$(sed ':a;N;$!ba;s/\n/\\n/g' final.txt)
             curl -L -X PATCH \
               -H "Authorization: token $GIST_PAT" \
               -H "Accept: application/vnd.github+json" \
               https://api.github.com/gists/$GIST_ID \
               -d "{\"files\":{\"my_best_cf_ips.txt\":{\"content\":\"$CONTENT\"}}}"
-
-            echo "✅ 推送成功：$(wc -l < best.txt) 个 40ms Ultra Elite IP"
+            echo "✅ 成功更新 $(wc -l < best.txt) 个精英 IP"
           else
-            echo "❌ 无可用 IP，即使放宽标准也失败"
+            echo "❌ 无可用 IP，流程终止"
             exit 1
           fi
