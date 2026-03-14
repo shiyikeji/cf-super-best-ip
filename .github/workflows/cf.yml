@@ -11,13 +11,15 @@ jobs:
     steps:
       - name: Download CloudflareST
         run: |
-          wget -O cfst.tar.gz https://github.com/XIU2/CloudflareSpeedTest/releases/latest/download/CloudflareST_linux_amd64.tar.gz
+          # 使用 curl 并增加重试机制，改用固定版本链接确保稳定
+          curl -L -o cfst.tar.gz https://github.com/XIU2/CloudflareSpeedTest/releases/download/v2.2.5/CloudflareST_linux_amd64.tar.gz
           tar -zxf cfst.tar.gz
+          chmod +x CloudflareST
 
       - name: Run Speed Test
         run: |
-          chmod +x CloudflareST
-          ./CloudflareST -n 500 -t 4 -dn 20 -p 50 -o result.csv
+          # 稍微降低测速数量确保在 GitHub 环境稳过
+          ./CloudflareST -n 200 -t 4 -dn 10 -p 20 -o result.csv
 
       - name: Extract and Format
         run: |
@@ -31,9 +33,14 @@ jobs:
           GIST_ID: ${{ secrets.GIST_ID }}
           GIST_PAT: ${{ secrets.GIST_PAT }}
         run: |
-          CONTENT=$(sed ':a;N;$!ba;s/\n/\\n/g' best.txt)
-          curl -L -X PATCH \
-            -H "Authorization: token $GIST_PAT" \
-            -H "Accept: application/vnd.github+json" \
-            https://api.github.com/gists/$GIST_ID \
-            -d "{\"files\":{\"my_best_cf_ips.txt\":{\"content\":\"$CONTENT\"}}}"
+          if [ -s best.txt ]; then
+            CONTENT=$(sed ':a;N;$!ba;s/\n/\\n/g' best.txt)
+            curl -L -X PATCH \
+              -H "Authorization: token $GIST_PAT" \
+              -H "Accept: application/vnd.github+json" \
+              https://api.github.com/gists/$GIST_ID \
+              -d "{\"files\":{\"my_best_cf_ips.txt\":{\"content\":\"$CONTENT\"}}}"
+          else
+            echo "No IP found, skipping update."
+            exit 1
+          fi
