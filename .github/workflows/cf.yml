@@ -3,7 +3,7 @@ name: CF Ultimate Best IP - Asia PoP Routing (Top 5)
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 */4 * * *" # 每4小时自动运行
+    - cron: "0 */6 * * *" # 每6小时自动运行
 
 jobs:
   build:
