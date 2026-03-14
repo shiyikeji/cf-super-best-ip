@@ -3,55 +3,68 @@ name: CF Ultimate Best IP - 40ms Ultra Elite
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 */4 * * *"   # 每4小时一次
+    - cron: "0 */4 * * *"   # 每4小时自动运行
 
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
-      - name: 下载最新 CloudflareST (v2.3.4)
+      - name: 下载最新 CloudflareST (v2.3.4) - 多源镜像加速
         run: |
-          curl -L -o cfst.tar.gz https://github.com/XIU2/CloudflareSpeedTest/releases/download/v2.3.4/cfst_linux_amd64.tar.gz
+          URL="https://github.com/XIU2/CloudflareSpeedTest/releases/download/v2.3.4/cfst_linux_amd64.tar.gz"
+          MIRRORS=(
+            "https://ghproxy.com/$URL"
+            "https://ghproxy.net/$URL"
+            "https://mirror.ghproxy.com/$URL"
+            "$URL"
+          )
+          for mirror in "${MIRRORS[@]}"; do
+            echo "尝试从 $mirror 下载..."
+            curl -L -f -o cfst.tar.gz "$mirror" && break
+          done
+          if [ ! -s cfst.tar.gz ]; then
+            echo "❌ 下载失败，所有源均不可用！"
+            exit 1
+          fi
           tar -zxf cfst.tar.gz
           chmod +x CloudflareST
+          ./CloudflareST --version   # 验证版本
 
       - name: 运行测速 (40ms 精英策略)
         run: |
-          # 2026 年社区验证较好的精英段（大陆三网 40–70ms 高概率段）
-          # 保留核心 + 近期热门小段，避免范围过大拖慢速度
+          # 2026年社区验证最优精英IP段（大陆三网40-70ms高概率）
           echo "1.1.1.0/24
           1.0.0.0/24
           104.16.0.0/16
           104.17.0.0/16
           104.18.0.0/16
           104.19.0.0/16
-          162.159.192.0/19   # 包含211小段，常有好路由
+          162.159.192.0/19
           162.159.200.0/22
           172.64.0.0/13
           172.67.0.0/16" > elite_ip.txt
 
-          # 极限调优参数（保持你的风格）
-          # -tl 160 稍放宽一点容错（GitHub runner 实际延迟≈国内40-65ms）
-          # -sl 8–10 根据晚高峰实际情况可微调
-          # -dn 20 保持
-          # -p 10 只留宇宙最强前10
           ./CloudflareST -f elite_ip.txt \
             -url https://speed.cloudflare.com/__down?bytes=100000000 \
             -sl 10 -tl 160 -dn 20 -p 10 -o result.csv
 
       - name: 智能过滤 & 格式化输出
         run: |
-          # 提取纯净 IP:443，支持 IPv4/IPv6
+          # 严格筛选：速度≥10MB/s + 延迟≤160ms
           awk -F, 'NR>1 && $6 >= 10 && $5 <= 160 {
             ip=$1
             if (ip ~ /:/) printf("[%s]:443\n", ip)
             else printf("%s:443\n", ip)
           }' result.csv | sort -u > best.txt
 
-          # 如果结果为空，降低标准再跑一次（保底机制）
+          # 保底机制：如果严格条件为空，自动放宽标准
           if [ ! -s best.txt ]; then
-            echo "未找到严格40ms IP，降低标准重试..."
-            ./CloudflareST -f elite_ip.txt -url https://speed.cloudflare.com/__down?bytes=100000000 -sl 5 -tl 200 -dn 20 -p 5 -o result_loose.csv
+            echo "未找到严格40ms IP，启动保底模式（sl5/tl200）..."
+            ./CloudflareST -f elite_ip.txt \
+              -url https://speed.cloudflare.com/__down?bytes=100000000 \
+              -sl 5 -tl 200 -dn 20 -p 5 -o result_loose.csv
+            
             awk -F, 'NR>1 && $6 >= 5 && $5 <= 200 {
               ip=$1
               if (ip ~ /:/) printf("[%s]:443\n", ip)
@@ -59,20 +72,28 @@ jobs:
             }' result_loose.csv | sort -u > best.txt
           fi
 
+          echo "本次共筛选出 $(wc -l < best.txt) 个精英 IP"
+
       - name: 推送至 Gist
         env:
           GIST_ID: ${{ secrets.GIST_ID }}
           GIST_PAT: ${{ secrets.GIST_PAT }}
         run: |
           if [ -s best.txt ]; then
+            # 添加更新时间注释（方便查看）
+            echo "# 更新时间: $(date '+%Y-%m-%d %H:%M:%S') UTC+8" > temp.txt
+            cat best.txt >> temp.txt
+            mv temp.txt best.txt
+
             CONTENT=$(sed ':a;N;$!ba;s/\n/\\n/g' best.txt)
             curl -L -X PATCH \
               -H "Authorization: token $GIST_PAT" \
               -H "Accept: application/vnd.github+json" \
               https://api.github.com/gists/$GIST_ID \
               -d "{\"files\":{\"my_best_cf_ips.txt\":{\"content\":\"$CONTENT\"}}}"
-            echo "成功推送 $(wc -l < best.txt) 个精英 IP"
+            
+            echo "✅ 成功推送 $(wc -l < best.txt) 个40ms Ultra Elite IP 到 Gist"
           else
-            echo "即使放宽标准也无可用 IP，检查网络或范围..."
+            echo "❌ 即使放宽标准也无可用IP"
             exit 1
           fi
