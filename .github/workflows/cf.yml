@@ -1,4 +1,4 @@
-name: CF Ultimate Best IP - 40ms Ultra Elite
+name: CF Ultimate Best IP - 40ms Ultra Elite (Top 10)
 
 on:
   workflow_dispatch:
@@ -10,26 +10,17 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: 1. 下载并提取程序 (修复 v2.3.4 命名坑)
+      - name: 1. 下载并提取程序
         run: |
-          # 作者在 v2.3.4 已经把程序名改成了 cfst
           URL="https://github.com/XIU2/CloudflareSpeedTest/releases/download/v2.3.4/cfst_linux_amd64.tar.gz"
-          
-          # 多源下载，确保不会因为网络问题卡住
           curl -L -f --connect-timeout 20 --retry 3 -o cfst.tar.gz "$URL" || \
           curl -L -f -o cfst.tar.gz "https://ghproxy.net/$URL" || \
           curl -L -f -o cfst.tar.gz "https://fastly.jsdelivr.net/gh/XIU2/CloudflareSpeedTest@v2.3.4/cfst_linux_amd64.tar.gz"
-
-          # 解压
           tar -zxf cfst.tar.gz
-          
-          # 赋予最新的 cfst 程序执行权限
           chmod +x cfst
-          ./cfst -v
 
       - name: 2. 运行 40ms 精英测速
         run: |
-          # 写入三网直连核心段
           echo "1.1.1.0/24
           1.0.0.0/24
           104.16.0.0/16
@@ -41,28 +32,31 @@ jobs:
           172.64.0.0/13
           172.67.0.0/16" > elite_ip.txt
 
-          # 跑测速：只要下载大于 10MB/s，延迟低于 160ms 的顶级 IP
-          ./cfst -f elite_ip.txt -url https://speed.cloudflare.com/__down?bytes=100000000 -sl 10 -tl 160 -dn 20 -p 10 -o result.csv
+          # -p 15 多测几个作为候选池，后面再严格切前10
+          ./cfst -f elite_ip.txt -url https://speed.cloudflare.com/__down?bytes=100000000 -sl 10 -tl 160 -dn 20 -p 15 -o result.csv
 
-      - name: 3. 智能过滤 & 保底机制
+      - name: 3. 智能过滤 & 严格切片 (只要 10 个)
         run: |
           # 提取纯净 IP
           awk -F, 'NR>1 && $6 >= 10 && $5 <= 160 {
             ip=$1
             if (ip ~ /:/) printf("[%s]:443\n", ip)
             else printf("%s:443\n", ip)
-          }' result.csv | sort -u > best.txt
+          }' result.csv | sort -u > temp.txt
 
-          # 保底：如果要求太高没找到，降级到 5MB/s 再跑一次，保证不断更
-          if [ ! -s best.txt ]; then
-            echo "⚠️ 严格条件无 IP，启动保底模式..."
-            ./cfst -f elite_ip.txt -url https://speed.cloudflare.com/__down?bytes=50000000 -sl 5 -tl 200 -dn 20 -p 5 -o result_loose.csv
+          # 保底模式
+          if [ ! -s temp.txt ]; then
+            echo "⚠️ 启动保底模式..."
+            ./cfst -f elite_ip.txt -url https://speed.cloudflare.com/__down?bytes=50000000 -sl 5 -tl 200 -dn 20 -p 15 -o result_loose.csv
             awk -F, 'NR>1 && $6 >= 5 && $5 <= 200 {
               ip=$1
               if (ip ~ /:/) printf("[%s]:443\n", ip)
               else printf("%s:443\n", ip)
-            }' result_loose.csv | sort -u > best.txt
+            }' result_loose.csv | sort -u > temp.txt
           fi
+
+          # 🔪 核心精简：强制只取前 10 行
+          head -n 10 temp.txt > best.txt
 
       - name: 4. 推送至 Gist
         env:
@@ -70,18 +64,16 @@ jobs:
           GIST_PAT: ${{ secrets.GIST_PAT }}
         run: |
           if [ -s best.txt ]; then
-            # 加上最后更新时间，方便你在 Gist 里查看
             echo "# Updated: $(date '+%Y-%m-%d %H:%M:%S') UTC" > final.txt
             cat best.txt >> final.txt
             
-            # 推送到 GitHub Gist
             CONTENT=$(sed ':a;N;$!ba;s/\n/\\n/g' final.txt)
             curl -L -X PATCH \
               -H "Authorization: token $GIST_PAT" \
               -H "Accept: application/vnd.github+json" \
               https://api.github.com/gists/$GIST_ID \
               -d "{\"files\":{\"my_best_cf_ips.txt\":{\"content\":\"$CONTENT\"}}}"
-            echo "✅ 成功推送至 Gist！"
+            echo "✅ 成功推送严格筛选的 10 个神级 IP 至 Gist！"
           else
             echo "❌ 无可用 IP，流程终止"
             exit 1
