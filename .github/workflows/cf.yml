@@ -3,72 +3,83 @@ name: CF Ultimate Best IP - 40ms Ultra Elite
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 */4 * * *"
+    - cron: "0 */4 * * *" # 每4小时自动运行一次
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      - name: 1. 强化下载与路径捕获 (v2.3.4)
+      - name: 1. 环境准备与下载 (v2.3.4)
         run: |
-          # 下载
+          # 尝试多个镜像源，确保下载成功
           URL="https://github.com/XIU2/CloudflareSpeedTest/releases/download/v2.3.4/cfst_linux_amd64.tar.gz"
           curl -L -f --connect-timeout 20 --retry 3 -o cfst.tar.gz "$URL" || \
           curl -L -f -o cfst.tar.gz "https://ghproxy.net/$URL"
 
-          # 解压
+          # 解压并强制提取可执行文件（解决路径找不到的问题）
           tar -zxf cfst.tar.gz
-          
-          # 【核心修复】强制把子目录里的程序抓到当前目录
+          # 这一行非常关键：无论解压在哪，都把它找出来挪到当前根目录
           find . -name "CloudflareST" -type f -exec mv {} . \;
-          
-          # 验证程序是否存在
-          if [ ! -f ./CloudflareST ]; then
-            echo "❌ 依然找不到 CloudflareST 程序！"
-            ls -R
-            exit 1
-          fi
-          
           chmod +x CloudflareST
           ./CloudflareST -v
 
-      - name: 2. 运行精英测速 (40ms 策略)
+      - name: 2. 运行 40ms 精英测速
         run: |
-          # 优质段列表
+          # 锁定大陆三网直连核心段
           echo "1.1.1.0/24
           1.0.0.0/24
           104.16.0.0/16
           104.17.0.0/16
           104.18.0.0/16
+          104.19.0.0/16
           162.159.192.0/19
-          172.64.0.0/13" > elite_ip.txt
+          162.159.200.0/22
+          172.64.0.0/13
+          172.67.0.0/16" > elite_ip.txt
 
-          # 执行测速: 下载>10MB/s, 延迟<160ms (GitHub环境)
+          # 执行筛选: 速度 > 10MB/s, 延迟 < 160ms (GitHub机房延迟, 对应国内极速)
           ./CloudflareST -f elite_ip.txt -url https://speed.cloudflare.com/__down?bytes=100000000 -sl 10 -tl 160 -dn 20 -p 10 -o result.csv
 
-      - name: 3. 结果提取与推送
-        env:
-          GIST_ID: ${{ secrets.GIST_ID }}
-          GIST_PAT: ${{ secrets.GIST_PAT }}
+      - name: 3. 结果处理与保底机制
         run: |
-          # 格式化
-          awk -F, 'NR>1 {
+          # 尝试格式化输出
+          awk -F, 'NR>1 && $6 >= 10 && $5 <= 160 {
             ip=$1
             if (ip ~ /:/) printf("[%s]:443\n", ip)
             else printf("%s:443\n", ip)
           }' result.csv | sort -u > best.txt
 
-          # 推送逻辑
+          # 如果太严格没 IP，启动保底模式（放宽到 5MB/s, 200ms）
+          if [ ! -s best.txt ]; then
+            echo "⚠️ 严格条件无 IP，启动保底模式..."
+            ./CloudflareST -f elite_ip.txt -url https://speed.cloudflare.com/__down?bytes=50000000 -sl 5 -tl 200 -dn 20 -p 5 -o result_loose.csv
+            awk -F, 'NR>1 && $6 >= 5 && $5 <= 200 {
+              ip=$1
+              if (ip ~ /:/) printf("[%s]:443\n", ip)
+              else printf("%s:443\n", ip)
+            }' result_loose.csv | sort -u > best.txt
+          fi
+
+      - name: 4. 推送至 Gist
+        env:
+          GIST_ID: ${{ secrets.GIST_ID }}
+          GIST_PAT: ${{ secrets.GIST_PAT }}
+        run: |
           if [ -s best.txt ]; then
-            CONTENT=$(sed ':a;N;$!ba;s/\n/\\n/g' best.txt)
+            # 增加时间戳
+            echo "# Updated: $(date '+%Y-%m-%d %H:%M:%S')" > final.txt
+            cat best.txt >> final.txt
+            
+            # 转换为 JSON 格式推送
+            CONTENT=$(sed ':a;N;$!ba;s/\n/\\n/g' final.txt)
             curl -L -X PATCH \
               -H "Authorization: token $GIST_PAT" \
               -H "Accept: application/vnd.github+json" \
               https://api.github.com/gists/$GIST_ID \
               -d "{\"files\":{\"my_best_cf_ips.txt\":{\"content\":\"$CONTENT\"}}}"
-            echo "✅ 成功更新至 Gist"
+            echo "✅ 成功推送精英 IP 至 Gist"
           else
-            echo "❌ 没找到符合条件的 IP"
+            echo "❌ 依然无可用 IP，请检查网络"
             exit 1
           fi
