@@ -1,4 +1,4 @@
-name: CF Ultimate - Asia Elite Sniper (Top 5)
+name: CF Ultimate Best IP - Asia PoP Routing (Top 5)
 
 on:
   workflow_dispatch:
@@ -10,47 +10,59 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: 1. 下载并提取核心程序
+      - name: 1. 下载并提取核心测速程序
         run: |
           URL="https://github.com/XIU2/CloudflareSpeedTest/releases/download/v2.3.4/cfst_linux_amd64.tar.gz"
           curl -L -f --connect-timeout 20 --retry 3 -o cfst.tar.gz "$URL" || \
-          curl -L -f -o cfst.tar.gz "https://ghproxy.net/$URL"
+          curl -L -f -o cfst.tar.gz "https://ghproxy.net/$URL" || \
+          curl -L -f -o cfst.tar.gz "https://fastly.jsdelivr.net/gh/XIU2/CloudflareSpeedTest@v2.3.4/cfst_linux_amd64.tar.gz"
           tar -zxf cfst.tar.gz
           chmod +x cfst
 
-      - name: 2. 注入绝密亚太纯净段
+      - name: 2. 注入亚太友好 / 大陆直连 IP 段
         run: |
-          # 剔除了容易飘到美东的杂乱段，只保留历史证明含 HK/SG/JP 极高的精锐段
-          echo "104.16.0.0/16
-          104.18.0.0/16
+          echo "1.0.0.0/24
+          1.1.1.0/24
+          104.16.0.0/14
+          104.20.0.0/14
+          104.24.0.0/14
           108.162.192.0/18
           141.101.114.0/24
           162.159.192.0/24
+          162.159.200.0/24
           172.64.0.0/14
           172.67.0.0/16
-          188.114.96.0/20" > asia_elite_ip.txt
+          188.114.96.0/20
+          198.41.200.0/24" > asia_elite_ip.txt
 
-      - name: 3. 广撒网测速 (提取大样本)
+      - name: 3. 运行测速 (高带宽 + 宽容亚太延迟)
         run: |
-          # -p 50：提取 50 个样本，为了后面的“延迟甜点区”过滤做准备
-          ./cfst -f asia_elite_ip.txt -url https://speed.cloudflare.com/__down?bytes=100000000 -sl 8 -tl 220 -dn 20 -p 50 -o result.csv
+          # 加上 || true 防止测不到数据时强行退出
+          ./cfst -f asia_elite_ip.txt -url https://speed.cloudflare.com/__down?bytes=100000000 -sl 10 -tl 220 -dn 20 -p 20 -o result.csv || true
+          touch result.csv # 确保文件存在
 
-      - name: 4. 亚太狙击行动：强制截取甜点区 + 速度重排 (只要 5 个)
+      - name: 4. 智能过滤 & 斩首行动 (只留 5 个)
         run: |
-          # 🚨 极限精简：head -n 5
-          awk -F, 'NR>1 && $6 >= 8 && $5 >= 140 && $5 <= 210' result.csv | sort -t, -k6,6nr | head -n 5 | awk -F, '{
-            if ($1 ~ /:/) printf("[%s]:443\n", $1)
-            else printf("%s:443\n", $1)
-          }' > best.txt
+          awk -F, 'NR>1 && $6 >= 10 && $5 <= 220 {
+            ip=$1
+            if (ip ~ /:/) printf("[%s]:443\n", ip)
+            else printf("%s:443\n", ip)
+          }' result.csv | sort -u > temp.txt
 
-          # 保底模式（如果亚太节点全挂了，退回普通选法，同样只取前 5）
-          if [ ! -s best.txt ]; then
-            echo "⚠️ 亚太严选无结果，启动备用保底模式..."
-            awk -F, 'NR>1 && $6 >= 5 && $5 <= 220' result.csv | sort -t, -k6,6nr | head -n 5 | awk -F, '{
-              if ($1 ~ /:/) printf("[%s]:443\n", $1)
-              else printf("%s:443\n", $1)
-            }' > best.txt
+          # 保底：如果亚太优质节点暂时枯竭，降级保证可用性
+          if [ ! -s temp.txt ]; then
+            echo "⚠️ 严格条件无 IP，启动 5MB/s 保底模式..."
+            ./cfst -f asia_elite_ip.txt -url https://speed.cloudflare.com/__down?bytes=50000000 -sl 5 -tl 250 -dn 20 -p 15 -o result_loose.csv || true
+            touch result_loose.csv
+            awk -F, 'NR>1 && $6 >= 5 && $5 <= 250 {
+              ip=$1
+              if (ip ~ /:/) printf("[%s]:443\n", ip)
+              else printf("%s:443\n", ip)
+            }' result_loose.csv | sort -u > temp.txt
           fi
+
+          # 🔪 强制截断：全宇宙只要前 5 名
+          head -n 5 temp.txt > best.txt
 
       - name: 5. 推送至 Gist
         env:
@@ -58,7 +70,7 @@ jobs:
           GIST_PAT: ${{ secrets.GIST_PAT }}
         run: |
           if [ -s best.txt ]; then
-            echo "# Updated: $(date '+%Y-%m-%d %H:%M:%S') UTC (Asia Sniper Top 5)" > final.txt
+            echo "# Updated: $(date '+%Y-%m-%d %H:%M:%S') UTC" > final.txt
             cat best.txt >> final.txt
             
             CONTENT=$(sed ':a;N;$!ba;s/\n/\\n/g' final.txt)
@@ -67,7 +79,7 @@ jobs:
               -H "Accept: application/vnd.github+json" \
               https://api.github.com/gists/$GIST_ID \
               -d "{\"files\":{\"my_best_cf_ips.txt\":{\"content\":\"$CONTENT\"}}}"
-            echo "✅ 成功推送亚太【极致 Top 5】神级 IP 至 Gist！"
+            echo "✅ 成功推送亚太扩容版的 5 个神级 IP 至 Gist！"
           else
             echo "❌ 无可用 IP，流程终止"
             exit 1
