@@ -1,9 +1,9 @@
-name: CF Ultimate Best IP System
+name: CF Ultimate Best IP System - Pro Version
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 */4 * * *"
+    - cron: "0 */4 * * *" # 每4小时自动运行
 
 jobs:
   build:
@@ -11,21 +11,33 @@ jobs:
     steps:
       - name: Download CloudflareST
         run: |
-          # 使用 curl 并增加重试机制，改用固定版本链接确保稳定
           curl -L -o cfst.tar.gz https://github.com/XIU2/CloudflareSpeedTest/releases/download/v2.2.5/CloudflareST_linux_amd64.tar.gz
           tar -zxf cfst.tar.gz
           chmod +x CloudflareST
 
-      - name: Run Speed Test
+      - name: Run Speed Test (Speed First Strategy)
         run: |
-          # 稍微降低测速数量确保在 GitHub 环境稳过
-          ./CloudflareST -n 200 -t 4 -dn 10 -p 20 -o result.csv
+          # 策略说明：
+          # -url: 使用测速文件，确保 IP 真的能跑动流量
+          # -sl 5: 只要下载速度 > 5MB/s 的 IP（若结果太少可改为 3）
+          # -tl 280: GitHub 到 CF 的延迟上限设为 280ms（GitHub 在美西，这个数值很正常）
+          # -dn 10: 每个 IP 测试 10 个线程，模拟真实使用
+          # -p 30: 最终保留最强的 30 个 IP
+          
+          # 获取官方及三网优化的 IP 段列表
+          curl -s -o ip.txt https://raw.githubusercontent.com/XIU2/CloudflareSpeedTest/master/ip.txt
+          
+          ./CloudflareST -f ip.txt -url https://cf.v2ray-agent.com/100mb -sl 5 -tl 280 -dn 10 -p 30 -o result.csv
 
-      - name: Extract and Format
+      - name: Smart Filter & Format
         run: |
+          # 提取测速结果并格式化
+          # 第1列是IP，第2列是延迟，第6列是下载速度(MB/s)
           awk -F, 'NR>1 {
-            if ($1 ~ /:/) printf("[%s]:443#CF-V6\n",$1);
-            else printf("%s:443#CF\n",$1);
+            if ($1 ~ /:/)
+              printf("[%s]:443#CF-Speed:%.1fMB\n",$1,$6);
+            else
+              printf("%s:443#CF-Speed:%.1fMB\n",$1,$6);
           }' result.csv > best.txt
 
       - name: Push to Gist
@@ -34,13 +46,15 @@ jobs:
           GIST_PAT: ${{ secrets.GIST_PAT }}
         run: |
           if [ -s best.txt ]; then
+            # 将换行符转换为 \n 字符串
             CONTENT=$(sed ':a;N;$!ba;s/\n/\\n/g' best.txt)
             curl -L -X PATCH \
               -H "Authorization: token $GIST_PAT" \
               -H "Accept: application/vnd.github+json" \
               https://api.github.com/gists/$GIST_ID \
               -d "{\"files\":{\"my_best_cf_ips.txt\":{\"content\":\"$CONTENT\"}}}"
+            echo "Successfully updated Gist with latest high-speed IPs."
           else
-            echo "No IP found, skipping update."
+            echo "Error: No qualified IPs found based on speed criteria!"
             exit 1
           fi
