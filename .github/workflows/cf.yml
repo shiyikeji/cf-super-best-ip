@@ -21,6 +21,7 @@ jobs:
 
       - name: 2. 注入亚太友好 / 大陆直连 IP 段
         run: |
+          # 扩大了库容，加入了大量被公认容易飘到亚太 (HK/SG/JP) 和欧洲优质直连的段
           echo "1.0.0.0/24
           1.1.1.0/24
           104.16.0.0/14
@@ -37,9 +38,10 @@ jobs:
 
       - name: 3. 运行测速 (高带宽 + 宽容亚太延迟)
         run: |
-          # 加上 || true 防止测不到数据时强行退出
-          ./cfst -f asia_elite_ip.txt -url https://speed.cloudflare.com/__down?bytes=100000000 -sl 10 -tl 220 -dn 20 -p 20 -o result.csv || true
-          touch result.csv # 确保文件存在
+          # 策略调整：
+          # -tl 220: 放宽延迟，为了让 GitHub 能抓到远在香港和新加坡的节点
+          # -sl 10: 下载速度依旧严格限制 10MB/s，保证绝对的高带宽
+          ./cfst -f asia_elite_ip.txt -url https://speed.cloudflare.com/__down?bytes=100000000 -sl 10 -tl 220 -dn 20 -p 20 -o result.csv
 
       - name: 4. 智能过滤 & 斩首行动 (只留 5 个)
         run: |
@@ -52,8 +54,7 @@ jobs:
           # 保底：如果亚太优质节点暂时枯竭，降级保证可用性
           if [ ! -s temp.txt ]; then
             echo "⚠️ 严格条件无 IP，启动 5MB/s 保底模式..."
-            ./cfst -f asia_elite_ip.txt -url https://speed.cloudflare.com/__down?bytes=50000000 -sl 5 -tl 250 -dn 20 -p 15 -o result_loose.csv || true
-            touch result_loose.csv
+            ./cfst -f asia_elite_ip.txt -url https://speed.cloudflare.com/__down?bytes=50000000 -sl 5 -tl 250 -dn 20 -p 15 -o result_loose.csv
             awk -F, 'NR>1 && $6 >= 5 && $5 <= 250 {
               ip=$1
               if (ip ~ /:/) printf("[%s]:443\n", ip)
