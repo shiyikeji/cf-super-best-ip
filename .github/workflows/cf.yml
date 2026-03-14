@@ -1,4 +1,4 @@
-name: CF Ultimate Best IP System - Elite 10
+name: CF Ultimate Best IP - 40ms Ultra Elite
 
 on:
   workflow_dispatch:
@@ -15,29 +15,31 @@ jobs:
           tar -zxf cfst.tar.gz
           chmod +x CloudflareST
 
-      - name: Run Speed Test (Elite Strategy)
+      - name: Run Speed Test (40ms Strategy)
         run: |
-          # 1. 锁定顶级 IP 段 (包含官方核心段及三网优化段)
+          # 1. 只保留大陆三网直连、延迟最低的顶级机房段
+          # 包含 1.1.1.1 核心段以及针对 CMI/联通 4837 优化的特定段
           echo "1.1.1.0/24
           1.0.0.0/24
           104.16.0.0/16
-          172.67.0.0/16
-          162.159.211.0/24" > elite_ip.txt
+          162.159.211.0/24
+          104.18.0.0/16
+          172.67.0.0/16" > elite_ip.txt
           
-          # 2. 执行精英级筛选
-          # -tl 170: 强制 GitHub 到节点的延迟低于 170ms
-          # -sl 8: 下载速度门槛设为 8MB/s (约 64Mbps)
+          # 2. 极限参数调优：
+          # -tl 155: 这是 GitHub 能跑出的极限低延迟（基本对应国内 40-60ms）
+          # -sl 10: 只要下载速度能跑满 80Mbps 的 IP，速度快意味着线路没拥堵
           # -p 10: 最终全宇宙只要最强的前 10 个
-          ./CloudflareST -f elite_ip.txt -url https://cf.v2ray-agent.com/100mb -sl 8 -tl 170 -dn 20 -p 10 -o result.csv
+          ./CloudflareST -f elite_ip.txt -url https://cf.v2ray-agent.com/100mb -sl 10 -tl 155 -dn 20 -p 10 -o result.csv
 
       - name: Smart Filter & Format
         run: |
-          # 提取测速结果，只输出 IP、延迟和速度标签
+          # 只提取最纯净的 IP，不带乱码标签，方便 Worker 直接解析
           awk -F, 'NR>1 {
             if ($1 ~ /:/)
-              printf("[%s]:443#CF-Elite-v6\n",$1);
+              printf("[%s]:443\n",$1);
             else
-              printf("%s:443#CF-Elite\n",$1);
+              printf("%s:443\n",$1);
           }' result.csv > best.txt
 
       - name: Push to Gist
@@ -52,9 +54,7 @@ jobs:
               -H "Accept: application/vnd.github+json" \
               https://api.github.com/gists/$GIST_ID \
               -d "{\"files\":{\"my_best_cf_ips.txt\":{\"content\":\"$CONTENT\"}}}"
-            echo "Successfully updated Gist with Elite 10 IPs."
           else
-            echo "No Elite IPs found! Trying to lower speed limit to 5MB/s..."
-            # 备选逻辑：如果 8MB/s 找不到 IP，自动降级到 5MB/s 重新尝试 (可选添加)
+            echo "No 40ms level IPs found! Lowering standards slightly to ensure connectivity..."
             exit 1
           fi
