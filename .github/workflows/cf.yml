@@ -1,45 +1,120 @@
-      - name: 下载最新 CloudflareST (v2.3.4) - 加强验证版
+name: CF Ultimate Best IP - 40ms Ultra Elite
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 */4 * * *"   # 每4小时运行一次
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 下载最新 CloudflareST (v2.3.4) - 加强验证 & 多源
         run: |
           URL="https://github.com/XIU2/CloudflareSpeedTest/releases/download/v2.3.4/cfst_linux_amd64.tar.gz"
           MIRRORS=(
-            "$URL"                            # 优先官方
+            "$URL"                                      # 优先官方
+            "https://fastly.jsdelivr.net/gh/XIU2/CloudflareSpeedTest@v2.3.4/cfst_linux_amd64.tar.gz"  # jsdelivr 加速（推荐）
+            "https://cdn.jsdelivr.net/gh/XIU2/CloudflareSpeedTest@v2.3.4/cfst_linux_amd64.tar.gz"
             "https://ghproxy.com/$URL"
-            "https://ghproxy.net/$URL"
             "https://mirror.ghproxy.com/$URL"
-            "https://fastly.jsdelivr.net/gh/XIU2/CloudflareSpeedTest@v2.3.4/cfst_linux_amd64.tar.gz"  # jsdelivr 加速（常用于 Releases）
           )
 
           DOWNLOADED=false
           for mirror in "${MIRRORS[@]}"; do
-            echo "尝试从 $mirror 下载..."
-            curl -L -f --connect-timeout 15 --retry 2 -o cfst.tar.gz "$mirror"
+            echo "尝试下载: $mirror"
+            curl -L -f --connect-timeout 20 --retry 3 -o cfst.tar.gz "$mirror"
             if [ $? -eq 0 ] && [ -s cfst.tar.gz ]; then
-              # 检查文件大小（真实文件 ≈5-10MB，<2MB 基本是错误页）
-              FILE_SIZE=$(stat -c %s cfst.tar.gz 2>/dev/null || stat -f %z cfst.tar.gz)
-              if [ "$FILE_SIZE" -gt 2000000 ]; then   # >2MB 才算合理
-                echo "下载成功，大小: ${FILE_SIZE} 字节"
+              FILE_SIZE=$(stat -c %s cfst.tar.gz 2>/dev/null || stat -f %z cfst.tar.gz || echo 0)
+              echo "文件大小: ${FILE_SIZE} 字节"
+              if [ "$FILE_SIZE" -gt 2000000 ]; then  # >2MB 为有效文件（真实 ≈3.1MB）
                 DOWNLOADED=true
                 break
               else
-                echo "文件太小 (${FILE_SIZE} 字节)，疑似错误页，丢弃..."
+                echo "文件太小，疑似错误页，丢弃..."
+                head -n 8 cfst.tar.gz || true
                 rm -f cfst.tar.gz
               fi
             fi
           done
 
           if [ "$DOWNLOADED" != "true" ]; then
-            echo "❌ 所有源下载失败或文件无效！"
+            echo "❌ 所有下载源失败或文件无效！请检查网络或镜像可用性。"
             exit 1
           fi
 
-          # 额外验证：检查是否 gzip 格式
-          if ! file cfst.tar.gz | grep -q "gzip compressed data"; then
-            echo "❌ 下载的文件不是 gzip 格式！可能是 HTML 错误页。"
-            head -n 5 cfst.tar.gz   # 显示前几行看是不是 HTML
+          # 验证 gzip 格式
+          if ! file cfst.tar.gz | grep -qi "gzip compressed data"; then
+            echo "❌ 下载文件不是 gzip 格式！可能是 HTML 页面。"
+            head -n 10 cfst.tar.gz
             exit 1
           fi
 
           tar -zxf cfst.tar.gz
           chmod +x CloudflareST
           ls -l CloudflareST
-          ./CloudflareST --version   # 输出版本确认运行正常
+          ./CloudflareST --version  # 确认可运行
+
+      - name: 运行测速 (40ms 精英策略)
+        run: |
+          # 精英 IP 段（大陆三网 40-70ms 高概率）
+          echo "1.1.1.0/24
+          1.0.0.0/24
+          104.16.0.0/16
+          104.17.0.0/16
+          104.18.0.0/16
+          104.19.0.0/16
+          162.159.192.0/19
+          162.159.200.0/22
+          172.64.0.0/13
+          172.67.0.0/16" > elite_ip.txt
+
+          ./CloudflareST -f elite_ip.txt \
+            -url https://speed.cloudflare.com/__down?bytes=100000000 \
+            -sl 10 -tl 160 -dn 20 -p 10 -o result.csv
+
+      - name: 智能过滤 & 格式化输出
+        run: |
+          awk -F, 'NR>1 && $6 >= 10 && $5 <= 160 {
+            ip=$1
+            if (ip ~ /:/) printf("[%s]:443\n", ip)
+            else printf("%s:443\n", ip)
+          }' result.csv | sort -u > best.txt
+
+          if [ ! -s best.txt ]; then
+            echo "严格条件无 IP，启动保底模式..."
+            ./CloudflareST -f elite_ip.txt \
+              -url https://speed.cloudflare.com/__down?bytes=100000000 \
+              -sl 5 -tl 200 -dn 20 -p 5 -o result_loose.csv
+            awk -F, 'NR>1 && $6 >= 5 && $5 <= 200 {
+              ip=$1
+              if (ip ~ /:/) printf("[%s]:443\n", ip)
+              else printf("%s:443\n", ip)
+            }' result_loose.csv | sort -u > best.txt
+          fi
+
+          echo "筛选出 $(wc -l < best.txt) 个精英 IP"
+
+      - name: 推送至 Gist
+        env:
+          GIST_ID: ${{ secrets.GIST_ID }}
+          GIST_PAT: ${{ secrets.GIST_PAT }}
+        run: |
+          if [ -s best.txt ]; then
+            echo "# 更新时间: $(date '+%Y-%m-%d %H:%M:%S') UTC+8 (新加坡时间)" > temp.txt
+            cat best.txt >> temp.txt
+            mv temp.txt best.txt
+
+            CONTENT=$(sed ':a;N;$!ba;s/\n/\\n/g' best.txt)
+            curl -L -X PATCH \
+              -H "Authorization: token $GIST_PAT" \
+              -H "Accept: application/vnd.github+json" \
+              https://api.github.com/gists/$GIST_ID \
+              -d "{\"files\":{\"my_best_cf_ips.txt\":{\"content\":\"$CONTENT\"}}}"
+
+            echo "✅ 推送成功：$(wc -l < best.txt) 个 IP"
+          else
+            echo "❌ 无可用 IP，即使放宽也失败"
+            exit 1
+          fi
