@@ -1,16 +1,16 @@
-name: CF Ultimate Best IP - 40ms Ultra Elite (Top 10)
+name: CF Ultimate Best IP - Asia PoP Routing (Top 10)
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 */4 * * *" # 每4小时自动运行一次
+    - cron: "0 */4 * * *" # 每4小时自动运行
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      - name: 1. 下载并提取程序
+      - name: 1. 下载并提取核心测速程序
         run: |
           URL="https://github.com/XIU2/CloudflareSpeedTest/releases/download/v2.3.4/cfst_linux_amd64.tar.gz"
           curl -L -f --connect-timeout 20 --retry 3 -o cfst.tar.gz "$URL" || \
@@ -19,46 +19,53 @@ jobs:
           tar -zxf cfst.tar.gz
           chmod +x cfst
 
-      - name: 2. 运行 40ms 精英测速
+      - name: 2. 注入亚太友好 / 大陆直连 IP 段
         run: |
-          echo "1.1.1.0/24
-          1.0.0.0/24
-          104.16.0.0/16
-          104.17.0.0/16
-          104.18.0.0/16
-          104.19.0.0/16
-          162.159.192.0/19
-          162.159.200.0/22
-          172.64.0.0/13
-          172.67.0.0/16" > elite_ip.txt
+          # 扩大了库容，加入了大量被公认容易飘到亚太 (HK/SG/JP) 和欧洲优质直连的段
+          echo "1.0.0.0/24
+          1.1.1.0/24
+          104.16.0.0/14
+          104.20.0.0/14
+          104.24.0.0/14
+          108.162.192.0/18
+          141.101.114.0/24
+          162.159.192.0/24
+          162.159.200.0/24
+          172.64.0.0/14
+          172.67.0.0/16
+          188.114.96.0/20
+          198.41.200.0/24" > asia_elite_ip.txt
 
-          # -p 15 多测几个作为候选池，后面再严格切前10
-          ./cfst -f elite_ip.txt -url https://speed.cloudflare.com/__down?bytes=100000000 -sl 10 -tl 160 -dn 20 -p 15 -o result.csv
-
-      - name: 3. 智能过滤 & 严格切片 (只要 10 个)
+      - name: 3. 运行测速 (高带宽 + 宽容亚太延迟)
         run: |
-          # 提取纯净 IP
-          awk -F, 'NR>1 && $6 >= 10 && $5 <= 160 {
+          # 策略调整：
+          # -tl 220: 放宽延迟，为了让 GitHub 能抓到远在香港和新加坡的节点
+          # -sl 10: 下载速度依旧严格限制 10MB/s，保证绝对的高带宽
+          ./cfst -f asia_elite_ip.txt -url https://speed.cloudflare.com/__down?bytes=100000000 -sl 10 -tl 220 -dn 20 -p 20 -o result.csv
+
+      - name: 4. 智能过滤 & 斩首行动 (只留 10 个)
+        run: |
+          awk -F, 'NR>1 && $6 >= 10 && $5 <= 220 {
             ip=$1
             if (ip ~ /:/) printf("[%s]:443\n", ip)
             else printf("%s:443\n", ip)
           }' result.csv | sort -u > temp.txt
 
-          # 保底模式
+          # 保底：如果亚太优质节点暂时枯竭，降级保证可用性
           if [ ! -s temp.txt ]; then
-            echo "⚠️ 启动保底模式..."
-            ./cfst -f elite_ip.txt -url https://speed.cloudflare.com/__down?bytes=50000000 -sl 5 -tl 200 -dn 20 -p 15 -o result_loose.csv
-            awk -F, 'NR>1 && $6 >= 5 && $5 <= 200 {
+            echo "⚠️ 严格条件无 IP，启动 5MB/s 保底模式..."
+            ./cfst -f asia_elite_ip.txt -url https://speed.cloudflare.com/__down?bytes=50000000 -sl 5 -tl 250 -dn 20 -p 15 -o result_loose.csv
+            awk -F, 'NR>1 && $6 >= 5 && $5 <= 250 {
               ip=$1
               if (ip ~ /:/) printf("[%s]:443\n", ip)
               else printf("%s:443\n", ip)
             }' result_loose.csv | sort -u > temp.txt
           fi
 
-          # 🔪 核心精简：强制只取前 10 行
+          # 🔪 强制截断：全宇宙只要前 10 名
           head -n 10 temp.txt > best.txt
 
-      - name: 4. 推送至 Gist
+      - name: 5. 推送至 Gist
         env:
           GIST_ID: ${{ secrets.GIST_ID }}
           GIST_PAT: ${{ secrets.GIST_PAT }}
@@ -73,7 +80,7 @@ jobs:
               -H "Accept: application/vnd.github+json" \
               https://api.github.com/gists/$GIST_ID \
               -d "{\"files\":{\"my_best_cf_ips.txt\":{\"content\":\"$CONTENT\"}}}"
-            echo "✅ 成功推送严格筛选的 10 个神级 IP 至 Gist！"
+            echo "✅ 成功推送亚太扩容版的 10 个神级 IP 至 Gist！"
           else
             echo "❌ 无可用 IP，流程终止"
             exit 1
