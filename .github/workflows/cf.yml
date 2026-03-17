@@ -3,7 +3,7 @@ name: CF Ultimate Best IP - Multi-Cloud Proxy (GCP/AWS/Azure)
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 */12 * * *" # 缩短为每12小时一次，保证反代IP的新鲜度
+    - cron: "0 */12 * * *" # 每12小时自动运行一次
 
 jobs:
   build:
@@ -16,17 +16,13 @@ jobs:
           curl -L -f --retry 3 -o cfst.tar.gz "$URL"
           tar -zxf cfst.tar.gz && chmod +x cfst
 
-      - name: 2. 注入“大厂反代”核心段
+      - name: 2. 注入“大厂反代”核心段 (已移除中文注释修复报错)
         run: |
-          # 核心策略：剔除官方烂大街段，只扫高含金量的反代段
           cat <<EOF > target_ips.txt
-          # GCP (谷歌云 - 移动的神)
           34.80.0.0/12
           35.190.0.0/16
-          # AWS (亚马逊 - 电信联通极品)
           54.240.0.0/12
           52.64.0.0/10
-          # Azure/Oracle (微软/甲骨文 - 小众反代)
           20.190.0.0/16
           150.136.0.0/16
           129.146.0.0/16
@@ -34,24 +30,25 @@ jobs:
 
       - name: 3. 运行测速 (针对反代节点调优)
         run: |
-          # 调整说明：
-          # -tp 443: 反代节点必须测443端口
-          # -tl 350: 因为 Actions 机器在美欧，去连亚太反代延迟较高，必须放宽到350ms，否则搜不到
-          # -sl 5: 初始要求 5MB/s，保证质量
+          # 运行参数说明：
+          # -tp 443: 强制只测 443 端口 (反代必需)
+          # -tl 350: 因为 Actions 机器在海外，测亚太反代延迟较高，放宽到 350ms
+          # -sl 5: 下载速度要求 5MB/s 起步
+          # -p 0: 不限制并发，利用大厂机器火力全开
           ./cfst -f target_ips.txt -tp 443 -url https://speed.cloudflare.com/__down?bytes=50000000 -sl 5 -tl 350 -dn 30 -p 0 -o result.csv
 
       - name: 4. 智能过滤与结果格式化
         run: |
-          # 只提取 IP:443 格式，并去重
+          # 只提取 IP:443 格式，并去重，严格模式取前 10 个
           awk -F, 'NR>1 && $6 >= 5 {
             ip=$1
             if (ip ~ /:/) printf("[%s]:443\n", ip)
             else printf("%s:443\n", ip)
           }' result.csv | head -n 10 > best.txt
 
-          # 如果 5MB/s 没搜到，保底放宽到 2MB/s
+          # 如果 5MB/s 没搜到，启动降级保底，放宽到 2MB/s 取前 5 个
           if [ ! -s best.txt ]; then
-            echo "⚠️ 严格模式无果，降级至 2MB/s..."
+            echo "⚠️ 严格模式无果，降级至 2MB/s 保底..."
             awk -F, 'NR>1 && $6 >= 2 {
               ip=$1
               if (ip ~ /:/) printf("[%s]:443\n", ip)
@@ -66,10 +63,10 @@ jobs:
         run: |
           if [ -s best.txt ]; then
             TIME=$(date '+%Y-%m-%d %H:%M:%S')
-            # 加上运营商说明，方便你自己脚本调用时识别
             echo "# Best Proxy IPs Updated at $TIME (UTC)" > final.txt
             cat best.txt >> final.txt
             
+            # 将换行符转义，适配 JSON 格式推送
             CONTENT=$(sed ':a;N;$!ba;s/\n/\\n/g' final.txt)
             curl -L -X PATCH \
               -H "Authorization: token $GIST_PAT" \
