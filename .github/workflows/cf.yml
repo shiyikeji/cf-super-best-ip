@@ -1,14 +1,13 @@
-name: CF Best IP - Strict Cloud Proxy Only
+name: CF Best IP - Smart API Fetch
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 */12 * * *" # 每 12 小时运行一次
+    - cron: "0 */12 * * *"
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    # 🛡️ 绝对防线：最多允许运行 5 分钟，死死保住免费额度！
     timeout-minutes: 5
 
     steps:
@@ -18,80 +17,50 @@ jobs:
           curl -L -f --retry 3 -o cfst.tar.gz "$URL"
           tar -zxf cfst.tar.gz && chmod +x cfst
 
-      - name: 2. 黑科技：精准生成 1000 个纯大厂随机 IP
+      - name: 2. 借力打力：直接拉取大佬的“全活反代库”并过滤大厂
         run: |
-          cat << 'EOF' > gen_ips.py
-          import ipaddress
-          import random
-
-          # 涵盖了 GCP, AWS, Azure, Oracle 的亚太优质反代段
-          cidrs = [
-              '34.80.0.0/12',    # GCP 台湾/香港
-              '35.190.0.0/16',   # GCP 亚太
-              '54.240.0.0/12',   # AWS 亚太
-              '52.64.0.0/10',    # AWS 亚太
-              '20.190.0.0/16',   # Azure
-              '129.146.0.0/16'   # Oracle
-          ]
-          target_ips = []
-
-          for cidr in cidrs:
-              net = ipaddress.ip_network(cidr)
-              # 每个段抽取 166 个，总计约 1000 个盲盒样本
-              for _ in range(166):
-                  ip_int = random.randint(int(net.network_address), int(net.broadcast_address))
-                  target_ips.append(str(ipaddress.IPv4Address(ip_int)))
-
-          with open('target_ips.txt', 'w') as f:
-              f.write('\n'.join(target_ips))
-          EOF
+          echo "正在从公开 API 拉取全球存活的反代 IP..."
+          # 拉取纯净的反代 IP 列表（这些全都是活着、开了 443 端口的）
+          curl -s "https://ipdb.api.030101.xyz/?type=proxy" > all_proxy.txt
           
-          python3 gen_ips.py
-          echo "✅ 成功从大厂库中生成 1000 个独立 IP 样本！"
+          # 核心物理电网：剔除 CF 官方段，只留下大厂/野生反代 IP
+          grep -vE "^104\.|^172\.|^162\.|^198\.|^108\.|^141\." all_proxy.txt > target_ips.txt
+          
+          COUNT=$(wc -l < target_ips.txt)
+          echo "✅ 成功获取并过滤出 $COUNT 个纯大厂/野生极品存活 IP！"
 
-      - name: 3. 极速隐蔽测速 (低并发，防微软拦截)
+      - name: 3. 极速测速 (全是活靶子，绝对秒开)
         run: |
-          # -p 50: 强制限流并发，绝对不触发 GitHub 防火墙
-          # -n 10: 取延迟前 10 名进行下载测速
-          ./cfst -f target_ips.txt -tp 443 -url https://www.google.com -n 10 -sl 1 -tl 250 -dn 15 -p 50 -o result.csv
-
-      - name: 4. 物理级电网：剔除 CF 官方 IP
-        run: |
-          if [ ! -f result.csv ]; then
-            echo "❌ result.csv 未生成，测速失败！"
+          if [ ! -s target_ips.txt ]; then
+            echo "❌ 过滤后没有大厂 IP，提前终止"
             exit 1
           fi
-          
-          # 核心斩首逻辑：
-          # 1. awk 提取 IP 并格式化为 IP:443
-          # 2. grep -vE 强行剔除以 104. 172. 162. 198. 开头的 CF 官方泛播段
-          # 3. 剩下的绝对是纯正的第三方大厂反代 IP！
+          # 因为全是活 IP，连 -p (并发限制) 都不需要设太低了
+          # -url 换回了更适合测可用性的目标
+          ./cfst -f target_ips.txt -tp 443 -url https://www.google.com -n 10 -sl 1 -tl 250 -dn 10 -o result.csv
+
+      - name: 4. 提取最优节点
+        run: |
+          if [ ! -f result.csv ]; then exit 1; fi
           awk -F, 'NR>1 {
             ip=$1
             if (ip ~ /:/) printf("[%s]:443\n", ip)
             else printf("%s:443\n", ip)
-          }' result.csv | grep -vE "^104\.|^172\.|^162\.|^198\." | head -n 10 > best.txt
+          }' result.csv | head -n 10 > best.txt
 
-      - name: 5. 自动推送至 Gist
+      - name: 5. 推送至 Gist
         env:
           GIST_ID: ${{ secrets.GIST_ID }}
           GIST_PAT: ${{ secrets.GIST_PAT }}
         run: |
           if [ -s best.txt ]; then
             TIME=$(date '+%Y-%m-%d %H:%M:%S')
-            echo "# Strict Cloud Proxy Only - Updated at $TIME (UTC)" > final.txt
+            echo "# Smart API Fetch (Pure Cloud Proxy) - $TIME" > final.txt
             cat best.txt >> final.txt
-            
             CONTENT=$(sed ':a;N;$!ba;s/\n/\\n/g' final.txt)
-            
-            curl -L -X PATCH \
-              -H "Authorization: token $GIST_PAT" \
-              -H "Accept: application/vnd.github+json" \
-              https://api.github.com/gists/$GIST_ID \
-              -d "{\"files\":{\"my_best_cf_ips.txt\":{\"content\":\"$CONTENT\"}}}"
-            
-            echo "✅ 纯净大厂 IP 测速并推送成功！"
+            curl -L -X PATCH -H "Authorization: token $GIST_PAT" -H "Accept: application/vnd.github+json" https://api.github.com/gists/$GIST_ID -d "{\"files\":{\"my_best_cf_ips.txt\":{\"content\":\"$CONTENT\"}}}"
+            echo "✅ 大厂 IP 测速完成，并已推送到 Gist！"
           else
-            echo "❌ 警告：本次抽样未能扫出速度达标的【大厂】节点（全军覆没或全是官方IP被剔除）。等待下次自动运行。"
+            echo "❌ 最终未找到达标的节点"
             exit 1
           fi
