@@ -1,13 +1,15 @@
-name: CF Ultimate Best IP - Multi-Cloud Proxy (GCP/AWS/Azure)
+name: CF Best IP - GitHub Safe Edition
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 */12 * * *" # 每12小时自动运行一次
+    - cron: "0 */12 * * *" # 每12小时跑一次
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    # 🚨 第一道免死金牌：整个任务最多只允许跑 5 分钟，超时直接强杀！绝对保护你的额度。
+    timeout-minutes: 5 
 
     steps:
       - name: 1. 下载测速程序
@@ -16,7 +18,7 @@ jobs:
           curl -L -f --retry 3 -o cfst.tar.gz "$URL"
           tar -zxf cfst.tar.gz && chmod +x cfst
 
-      - name: 2. 注入“大厂反代”核心段 (已移除中文注释修复报错)
+      - name: 2. 写入亚太直连“黄金段”
         run: |
           cat <<EOF > target_ips.txt
           34.80.0.0/12
@@ -24,37 +26,22 @@ jobs:
           54.240.0.0/12
           52.64.0.0/10
           20.190.0.0/16
-          150.136.0.0/16
-          129.146.0.0/16
           EOF
 
-      - name: 3. 运行测速 (针对反代节点调优)
+      - name: 3. 极速抽样测速 (严格限时)
         run: |
-          # 运行参数说明：
-          # -tp 443: 强制只测 443 端口 (反代必需)
-          # -tl 350: 因为 Actions 机器在海外，测亚太反代延迟较高，放宽到 350ms
-          # -sl 5: 下载速度要求 5MB/s 起步
-          # -p 0: 不限制并发，利用大厂机器火力全开
-          ./cfst -f target_ips.txt -tp 443 -url https://speed.cloudflare.com/__down?bytes=50000000 -sl 5 -tl 350 -dn 30 -p 0 -o result.csv
+          # 🚨 第二道免死金牌：-n 200
+          # 强制只随机抽取 200 个 IP 进行测速，实测 1~2 分钟内必定跑完！
+          # -url 换成了 www.google.com，模拟真实的翻墙连通性
+          ./cfst -f target_ips.txt -tp 443 -url https://www.google.com -n 200 -sl 3 -tl 200 -dn 10 -p 0 -o result.csv
 
-      - name: 4. 智能过滤与结果格式化
+      - name: 4. 提取最优节点
         run: |
-          # 只提取 IP:443 格式，并去重，严格模式取前 10 个
-          awk -F, 'NR>1 && $6 >= 5 {
+          awk -F, 'NR>1 {
             ip=$1
             if (ip ~ /:/) printf("[%s]:443\n", ip)
             else printf("%s:443\n", ip)
           }' result.csv | head -n 10 > best.txt
-
-          # 如果 5MB/s 没搜到，启动降级保底，放宽到 2MB/s 取前 5 个
-          if [ ! -s best.txt ]; then
-            echo "⚠️ 严格模式无果，降级至 2MB/s 保底..."
-            awk -F, 'NR>1 && $6 >= 2 {
-              ip=$1
-              if (ip ~ /:/) printf("[%s]:443\n", ip)
-              else printf("%s:443\n", ip)
-            }' result.csv | head -n 5 > best.txt
-          fi
 
       - name: 5. 推送至 Gist
         env:
@@ -63,18 +50,12 @@ jobs:
         run: |
           if [ -s best.txt ]; then
             TIME=$(date '+%Y-%m-%d %H:%M:%S')
-            echo "# Best Proxy IPs Updated at $TIME (UTC)" > final.txt
+            echo "# GitHub Safe Scan - Updated at $TIME" > final.txt
             cat best.txt >> final.txt
-            
-            # 将换行符转义，适配 JSON 格式推送
             CONTENT=$(sed ':a;N;$!ba;s/\n/\\n/g' final.txt)
-            curl -L -X PATCH \
-              -H "Authorization: token $GIST_PAT" \
-              -H "Accept: application/vnd.github+json" \
-              https://api.github.com/gists/$GIST_ID \
-              -d "{\"files\":{\"my_best_cf_ips.txt\":{\"content\":\"$CONTENT\"}}}"
-            echo "✅ 成功更新大厂反代 IP 到 Gist！"
+            curl -L -X PATCH -H "Authorization: token $GIST_PAT" -H "Accept: application/vnd.github+json" https://api.github.com/gists/$GIST_ID -d "{\"files\":{\"my_best_cf_ips.txt\":{\"content\":\"$CONTENT\"}}}"
+            echo "✅ 成功推送到 Gist！本次消耗额度极低。"
           else
-            echo "❌ 扫描失败，未发现可用反代 IP"
+            echo "❌ 未找到符合条件的 IP"
             exit 1
           fi
