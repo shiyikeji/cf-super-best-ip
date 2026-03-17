@@ -1,15 +1,15 @@
-name: CF Best IP - GitHub Safe Edition
+name: CF Best IP - Ultra Fast Random
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 */12 * * *" # 每12小时跑一次
+    - cron: "0 */12 * * *"
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    # 🚨 第一道免死金牌：整个任务最多只允许跑 5 分钟，超时直接强杀！绝对保护你的额度。
-    timeout-minutes: 5 
+    # 依然保留免死金牌，绝对不能去掉
+    timeout-minutes: 5
 
     steps:
       - name: 1. 下载测速程序
@@ -18,25 +18,33 @@ jobs:
           curl -L -f --retry 3 -o cfst.tar.gz "$URL"
           tar -zxf cfst.tar.gz && chmod +x cfst
 
-      - name: 2. 写入亚太直连“黄金段”
+      - name: 2. 随机盲抽大厂 IP (核心黑科技)
         run: |
-          cat <<EOF > target_ips.txt
-          34.80.0.0/12
-          35.190.0.0/16
-          54.240.0.0/12
-          52.64.0.0/10
-          20.190.0.0/16
-          EOF
+          # 使用 Python 瞬间从数百万大厂段中随机抽 5000 个样本
+          python3 -c "
+          import ipaddress, random
+          cidrs = ['34.80.0.0/12', '35.190.0.0/16', '54.240.0.0/12', '52.64.0.0/10', '20.190.0.0/16']
+          ips = []
+          for cidr in cidrs:
+              net = ipaddress.ip_network(cidr)
+              # 每个巨无霸段里随机抽 1000 个
+              for _ in range(1000):
+                  ips.append(str(ipaddress.IPv4Address(random.randint(int(net.network_address), int(net.broadcast_address)))))
+          with open('target_ips.txt', 'w') as f:
+              f.write('\n'.join(ips))
+          "
+          echo "✅ 成功从大厂库中随机抽出 5000 个样本供本次测速！"
 
-      - name: 3. 极速抽样测速 (严格限时)
+      - name: 3. 极速测速
         run: |
-          # 🚨 第二道免死金牌：-n 200
-          # 强制只随机抽取 200 个 IP 进行测速，实测 1~2 分钟内必定跑完！
-          # -url 换成了 www.google.com，模拟真实的翻墙连通性
-          ./cfst -f target_ips.txt -tp 443 -url https://www.google.com -n 200 -sl 3 -tl 200 -dn 10 -p 0 -o result.csv
+          # 致命参数修正：
+          # -n 10: 只要前 10 名进行下载测速 (极速完成)
+          # 因为只有 5000 个初始IP，延迟测速只需 5 秒！
+          ./cfst -f target_ips.txt -tp 443 -url https://www.google.com -n 10 -sl 3 -tl 200 -dn 10 -p 0 -o result.csv
 
       - name: 4. 提取最优节点
         run: |
+          if [ ! -f result.csv ]; then exit 1; fi
           awk -F, 'NR>1 {
             ip=$1
             if (ip ~ /:/) printf("[%s]:443\n", ip)
@@ -50,11 +58,11 @@ jobs:
         run: |
           if [ -s best.txt ]; then
             TIME=$(date '+%Y-%m-%d %H:%M:%S')
-            echo "# GitHub Safe Scan - Updated at $TIME" > final.txt
+            echo "# Ultra Fast Scan - Updated at $TIME" > final.txt
             cat best.txt >> final.txt
             CONTENT=$(sed ':a;N;$!ba;s/\n/\\n/g' final.txt)
             curl -L -X PATCH -H "Authorization: token $GIST_PAT" -H "Accept: application/vnd.github+json" https://api.github.com/gists/$GIST_ID -d "{\"files\":{\"my_best_cf_ips.txt\":{\"content\":\"$CONTENT\"}}}"
-            echo "✅ 成功推送到 Gist！本次消耗额度极低。"
+            echo "✅ 成功推送到 Gist！耗时极短！"
           else
             echo "❌ 未找到符合条件的 IP"
             exit 1
