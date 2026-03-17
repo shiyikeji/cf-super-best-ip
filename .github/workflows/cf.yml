@@ -1,69 +1,93 @@
-name: CF Best IP - Ultra Fast Random
+name: CF Best IP - Ultra Fast & Safe
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 */12 * * *"
+    - cron: "0 */12 * * *" # 每 12 小时运行一次
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    # 依然保留免死金牌，绝对不能去掉
+    # 🛡️ 绝对防线：最多允许运行 5 分钟，超时强制阻断，死死保住你的额度！
     timeout-minutes: 5
 
     steps:
-      - name: 1. 下载测速程序
+      - name: 1. 下载测速核心程序
         run: |
           URL="https://github.com/XIU2/CloudflareSpeedTest/releases/download/v2.3.4/cfst_linux_amd64.tar.gz"
           curl -L -f --retry 3 -o cfst.tar.gz "$URL"
           tar -zxf cfst.tar.gz && chmod +x cfst
 
-      - name: 2. 随机盲抽大厂 IP (核心黑科技)
+      - name: 2. 黑科技：精准生成 500 个随机 IP (防 Azure 防火墙拦截)
         run: |
-          # 使用 Python 瞬间从数百万大厂段中随机抽 5000 个样本
-          python3 -c "
-          import ipaddress, random
+          # 将 Python 抽取逻辑写入独立脚本，确保执行万无一失
+          cat << 'EOF' > gen_ips.py
+          import ipaddress
+          import random
+
+          # 涵盖了 GCP, AWS, Azure 的亚太优质反代段
           cidrs = ['34.80.0.0/12', '35.190.0.0/16', '54.240.0.0/12', '52.64.0.0/10', '20.190.0.0/16']
-          ips = []
+          target_ips = []
+
           for cidr in cidrs:
               net = ipaddress.ip_network(cidr)
-              # 每个巨无霸段里随机抽 1000 个
-              for _ in range(1000):
-                  ips.append(str(ipaddress.IPv4Address(random.randint(int(net.network_address), int(net.broadcast_address)))))
+              # 每个巨无霸段里只随机抽取 100 个 IP，总计 500 个
+              for _ in range(100):
+                  ip_int = random.randint(int(net.network_address), int(net.broadcast_address))
+                  target_ips.append(str(ipaddress.IPv4Address(ip_int)))
+
           with open('target_ips.txt', 'w') as f:
-              f.write('\n'.join(ips))
-          "
-          echo "✅ 成功从大厂库中随机抽出 5000 个样本供本次测速！"
+              f.write('\n'.join(target_ips))
+          EOF
+          
+          # 运行抽取脚本
+          python3 gen_ips.py
+          echo "✅ 成功从大厂库中抽取出 500 个独立 IP，避免了百万级扫描导致死机！"
 
-      - name: 3. 极速测速
+      - name: 3. 极速隐蔽测速 (低并发，防屏蔽)
         run: |
-          # 致命参数修正：
-          # -n 10: 只要前 10 名进行下载测速 (极速完成)
-          # 因为只有 5000 个初始IP，延迟测速只需 5 秒！
-          ./cfst -f target_ips.txt -tp 443 -url https://www.google.com -n 10 -sl 3 -tl 200 -dn 10 -p 0 -o result.csv
+          # --- 致命护城河参数 ---
+          # -p 50: 并发数限制为 50，绝不触发 GitHub 机器的 DDoS 防护（SNAT 耗尽）
+          # -n 5: 只对延迟最低的前 5 名进行真实下载测速
+          # -sl 1: 速度下限放宽到 1MB/s，保证在海外 Actions 环境中能有结果输出
+          # -tl 250: 延迟上限 250ms
+          ./cfst -f target_ips.txt -tp 443 -url https://www.google.com -n 5 -sl 1 -tl 250 -dn 10 -p 50 -o result.csv
 
-      - name: 4. 提取最优节点
+      - name: 4. 提取最优节点并格式化
         run: |
-          if [ ! -f result.csv ]; then exit 1; fi
+          if [ ! -f result.csv ]; then
+            echo "❌ result.csv 未生成，测速失败！"
+            exit 1
+          fi
+          
           awk -F, 'NR>1 {
             ip=$1
             if (ip ~ /:/) printf("[%s]:443\n", ip)
             else printf("%s:443\n", ip)
           }' result.csv | head -n 10 > best.txt
 
-      - name: 5. 推送至 Gist
+      - name: 5. 自动推送至你的 Gist
         env:
           GIST_ID: ${{ secrets.GIST_ID }}
           GIST_PAT: ${{ secrets.GIST_PAT }}
         run: |
           if [ -s best.txt ]; then
             TIME=$(date '+%Y-%m-%d %H:%M:%S')
-            echo "# Ultra Fast Scan - Updated at $TIME" > final.txt
+            echo "# Ultra Fast Scan - Updated at $TIME (UTC)" > final.txt
             cat best.txt >> final.txt
+            
+            # 转义换行符以适应 JSON 格式
             CONTENT=$(sed ':a;N;$!ba;s/\n/\\n/g' final.txt)
-            curl -L -X PATCH -H "Authorization: token $GIST_PAT" -H "Accept: application/vnd.github+json" https://api.github.com/gists/$GIST_ID -d "{\"files\":{\"my_best_cf_ips.txt\":{\"content\":\"$CONTENT\"}}}"
-            echo "✅ 成功推送到 Gist！耗时极短！"
+            
+            # 推送数据
+            curl -L -X PATCH \
+              -H "Authorization: token $GIST_PAT" \
+              -H "Accept: application/vnd.github+json" \
+              https://api.github.com/gists/$GIST_ID \
+              -d "{\"files\":{\"my_best_cf_ips.txt\":{\"content\":\"$CONTENT\"}}}"
+            
+            echo "✅ 测速并推送成功！本次耗时极短，额度安全！"
           else
-            echo "❌ 未找到符合条件的 IP"
+            echo "❌ 未能找到速度超过 1MB/s 的节点，请下次重试。"
             exit 1
           fi
