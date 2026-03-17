@@ -1,69 +1,63 @@
-name: CF Ultimate Best IP - Asia PoP Routing (Top 5)
+name: CF Ultimate Best IP - Multi-Cloud Proxy (GCP/AWS/Azure)
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 */23 * * *" # 每23小时自动运行
+    - cron: "0 */12 * * *" # 缩短为每12小时一次，保证反代IP的新鲜度
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      - name: 1. 下载并提取核心测速程序
+      - name: 1. 下载测速程序
         run: |
           URL="https://github.com/XIU2/CloudflareSpeedTest/releases/download/v2.3.4/cfst_linux_amd64.tar.gz"
-          curl -L -f --connect-timeout 20 --retry 3 -o cfst.tar.gz "$URL" || \
-          curl -L -f -o cfst.tar.gz "https://ghproxy.net/$URL" || \
-          curl -L -f -o cfst.tar.gz "https://fastly.jsdelivr.net/gh/XIU2/CloudflareSpeedTest@v2.3.4/cfst_linux_amd64.tar.gz"
-          tar -zxf cfst.tar.gz
-          chmod +x cfst
+          curl -L -f --retry 3 -o cfst.tar.gz "$URL"
+          tar -zxf cfst.tar.gz && chmod +x cfst
 
-      - name: 2. 注入亚太友好 / 大陆直连 IP 段
+      - name: 2. 注入“大厂反代”核心段
         run: |
-          # 扩大了库容，加入了大量被公认容易飘到亚太 (HK/SG/JP) 和欧洲优质直连的段
-          echo "1.0.0.0/24
-          1.1.1.0/24
-          104.16.0.0/14
-          104.20.0.0/14
-          104.24.0.0/14
-          108.162.192.0/18
-          141.101.114.0/24
-          162.159.192.0/24
-          162.159.200.0/24
-          172.64.0.0/14
-          172.67.0.0/16
-          188.114.96.0/20
-          198.41.200.0/24" > asia_elite_ip.txt
+          # 核心策略：剔除官方烂大街段，只扫高含金量的反代段
+          cat <<EOF > target_ips.txt
+          # GCP (谷歌云 - 移动的神)
+          34.80.0.0/12
+          35.190.0.0/16
+          # AWS (亚马逊 - 电信联通极品)
+          54.240.0.0/12
+          52.64.0.0/10
+          # Azure/Oracle (微软/甲骨文 - 小众反代)
+          20.190.0.0/16
+          150.136.0.0/16
+          129.146.0.0/16
+          EOF
 
-      - name: 3. 运行测速 (高带宽 + 宽容亚太延迟)
+      - name: 3. 运行测速 (针对反代节点调优)
         run: |
-          # 策略调整：
-          # -tl 220: 放宽延迟，为了让 GitHub 能抓到远在香港和新加坡的节点
-          # -sl 10: 下载速度依旧严格限制 10MB/s，保证绝对的高带宽
-          ./cfst -f asia_elite_ip.txt -url https://speed.cloudflare.com/__down?bytes=100000000 -sl 10 -tl 220 -dn 20 -p 20 -o result.csv
+          # 调整说明：
+          # -tp 443: 反代节点必须测443端口
+          # -tl 350: 因为 Actions 机器在美欧，去连亚太反代延迟较高，必须放宽到350ms，否则搜不到
+          # -sl 5: 初始要求 5MB/s，保证质量
+          ./cfst -f target_ips.txt -tp 443 -url https://speed.cloudflare.com/__down?bytes=50000000 -sl 5 -tl 350 -dn 30 -p 0 -o result.csv
 
-      - name: 4. 智能过滤 & 斩首行动 (只留 5 个)
+      - name: 4. 智能过滤与结果格式化
         run: |
-          awk -F, 'NR>1 && $6 >= 10 && $5 <= 220 {
+          # 只提取 IP:443 格式，并去重
+          awk -F, 'NR>1 && $6 >= 5 {
             ip=$1
             if (ip ~ /:/) printf("[%s]:443\n", ip)
             else printf("%s:443\n", ip)
-          }' result.csv | sort -u > temp.txt
+          }' result.csv | head -n 10 > best.txt
 
-          # 保底：如果亚太优质节点暂时枯竭，降级保证可用性
-          if [ ! -s temp.txt ]; then
-            echo "⚠️ 严格条件无 IP，启动 5MB/s 保底模式..."
-            ./cfst -f asia_elite_ip.txt -url https://speed.cloudflare.com/__down?bytes=50000000 -sl 5 -tl 250 -dn 20 -p 15 -o result_loose.csv
-            awk -F, 'NR>1 && $6 >= 5 && $5 <= 250 {
+          # 如果 5MB/s 没搜到，保底放宽到 2MB/s
+          if [ ! -s best.txt ]; then
+            echo "⚠️ 严格模式无果，降级至 2MB/s..."
+            awk -F, 'NR>1 && $6 >= 2 {
               ip=$1
               if (ip ~ /:/) printf("[%s]:443\n", ip)
               else printf("%s:443\n", ip)
-            }' result_loose.csv | sort -u > temp.txt
+            }' result.csv | head -n 5 > best.txt
           fi
-
-          # 🔪 强制截断：全宇宙只要前 5 名
-          head -n 5 temp.txt > best.txt
 
       - name: 5. 推送至 Gist
         env:
@@ -71,7 +65,9 @@ jobs:
           GIST_PAT: ${{ secrets.GIST_PAT }}
         run: |
           if [ -s best.txt ]; then
-            echo "# Updated: $(date '+%Y-%m-%d %H:%M:%S') UTC" > final.txt
+            TIME=$(date '+%Y-%m-%d %H:%M:%S')
+            # 加上运营商说明，方便你自己脚本调用时识别
+            echo "# Best Proxy IPs Updated at $TIME (UTC)" > final.txt
             cat best.txt >> final.txt
             
             CONTENT=$(sed ':a;N;$!ba;s/\n/\\n/g' final.txt)
@@ -80,8 +76,8 @@ jobs:
               -H "Accept: application/vnd.github+json" \
               https://api.github.com/gists/$GIST_ID \
               -d "{\"files\":{\"my_best_cf_ips.txt\":{\"content\":\"$CONTENT\"}}}"
-            echo "✅ 成功推送亚太扩容版的 5 个神级 IP 至 Gist！"
+            echo "✅ 成功更新大厂反代 IP 到 Gist！"
           else
-            echo "❌ 无可用 IP，流程终止"
+            echo "❌ 扫描失败，未发现可用反代 IP"
             exit 1
           fi
