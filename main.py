@@ -16,10 +16,10 @@ GIST_PAT = os.environ.get('GIST_PAT')
 # ==============================================================================
 # 核心配置区
 # ==============================================================================
-# 🎯 你的专属暗号 (作为试金石)
+# 🎯 你的专属暗号 (作为试金石，只要 hk 能通，sg 也一定能通)
 YOUR_SNI = "hk.lingqiu.eu.org"
 
-# 🌟 官方优选 IP 数据源
+# 🌟 官方优选 IP 数据源 (整理得明明白白，直接用)
 SOURCES = [
     "https://gist.githubusercontent.com/shiyikeji/3ce1217fe686b8d8525719086bae5312/raw/my_best_cf_ips.txt",
     "https://raw.githubusercontent.com/cmliu/WorkerVless2sub/main/addressesapi.txt",
@@ -32,7 +32,7 @@ WETEST_URLS = [
     "https://www.wetest.vip/page/cloudflare/address_v6.html"
 ]
 
-# 🕵️‍♂️ 终极“熟肉”大厂矿源
+# 🕵️‍♂️ 终极“熟肉”大厂矿源 (绝无 403 拦截，全是家庭宽带扫出的大厂节点)
 PROXY_SOURCES = [
     "https://raw.githubusercontent.com/ymyuuu/IPDB/main/bestproxy.txt",
     "https://raw.githubusercontent.com/ymyuuu/IPDB/main/proxy.txt"
@@ -61,6 +61,7 @@ def check_proxy_sni(ip_port):
         ctx = ssl.create_default_context()
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE 
+        # 设置极限超时 2.5 秒，优胜劣汰
         with socket.create_connection((ip, port), timeout=2.5) as sock:
             with ctx.wrap_socket(sock, server_hostname=YOUR_SNI) as ssock:
                 req = f"GET / HTTP/1.1\r\nHost: {YOUR_SNI}\r\nUser-Agent: Mozilla/5.0\r\n\r\n"
@@ -126,14 +127,14 @@ def fetch_ips():
         except Exception:
             pass
 
-    # ================== 3. 💥 究极淘金：拉取生肉矿源 + 并发对暗号 ==================
+    # ================== 3. 💥 究极淘金：拉取生肉矿源 + 自动补齐端口 ==================
     proxy_candidates = set()
     for url in PROXY_SOURCES:
         try:
-            print(f"\n🕸️ 正在拉取全网反代大厂生肉矿渣: {url}")
+            print(f"\n🕸️ 正在拉取大厂反代矿渣: {url}")
             res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=15)
             if res.status_code == 200:
-                # ✨ 核心修复：兼容纯 IP 格式，没端口的自动补齐 443 端口！
+                # 兼容 ymyuuu 的纯 IP 格式，没端口的统统自动贴上 :443
                 raw_matches = re.findall(r'\b(?:\d{1,3}\.){3}\d{1,3}(?::\d+)?\b', res.text)
                 for match in raw_matches:
                     if ':' not in match:
@@ -185,10 +186,11 @@ def fetch_ips():
             except Exception:
                 pass
 
-    # ================== 5. 👑 终极组装 + 强迫症精简 ==================
+    # ================== 5. 👑 终极组装 + 强迫症精简 + 保底逻辑 ==================
     final_ips = set()
     country_proxy_counter = defaultdict(int)
 
+    # 5.1 处理官方库和 WeTest 数据 (不限数量)
     for item in all_ips:
         ip_port, remark = item.split('#', 1)
         if remark in ["❄️冷库", "Auto", "Auto-QD"]:
@@ -209,6 +211,7 @@ def fetch_ips():
         else:
             final_ips.add(item)
 
+    # 5.2 处理反代数据，每个大厂国家严格限制只保留 5 个
     for item in sorted(list(temp_valid_proxy_list)): 
         ip_port, remark = item.split('#', 1)
         ip = ip_port.rsplit(':', 1)[0].strip('[]')
@@ -220,6 +223,11 @@ def fetch_ips():
                 country_proxy_counter[country_code] += 1
                 final_remark = f"{emoji} {country_code}-反代"
                 final_ips.add(f"{ip_port}#{final_remark}")
+        else:
+            # ✨ 保底逻辑：API 查不到归属地的优质 IP，统一标为 UN-反代
+            if country_proxy_counter["UN"] < 5:
+                country_proxy_counter["UN"] += 1
+                final_ips.add(f"{ip_port}#🌐 UN-反代")
                 
     # ================== 6. 排序 ==================
     def sort_by_name(item):
