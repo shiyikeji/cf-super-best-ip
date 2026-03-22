@@ -1,66 +1,30 @@
-name: CF Best IP - Smart API Fetch
+name: 🚀 每日全自动反代抓取与提纯
 
 on:
-  workflow_dispatch:
   schedule:
-    - cron: "0 */23 * * *"
+    - cron: '0 22 * * *' 
+  workflow_dispatch: 
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
 
     steps:
-      - name: 1. 下载测速核心程序
-        run: |
-          URL="https://github.com/XIU2/CloudflareSpeedTest/releases/download/v2.3.4/cfst_linux_amd64.tar.gz"
-          curl -L -f --retry 3 -o cfst.tar.gz "$URL"
-          tar -zxf cfst.tar.gz && chmod +x cfst
+      - name: 📥 检出代码
+        uses: actions/checkout@v3
 
-      - name: 2. 借力打力：直接拉取大佬的“全活反代库”并过滤大厂
-        run: |
-          echo "正在从公开 API 拉取全球存活的反代 IP..."
-          # 拉取纯净的反代 IP 列表（这些全都是活着、开了 443 端口的）
-          curl -s "https://ipdb.api.030101.xyz/?type=proxy" > all_proxy.txt
-          
-          # 核心物理电网：剔除 CF 官方段，只留下大厂/野生反代 IP
-          grep -vE "^104\.|^172\.|^162\.|^198\.|^108\.|^141\." all_proxy.txt > target_ips.txt
-          
-          COUNT=$(wc -l < target_ips.txt)
-          echo "✅ 成功获取并过滤出 $COUNT 个纯大厂/野生极品存活 IP！"
+      - name: 🐍 设置 Python 环境
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
 
-      - name: 3. 极速测速 (全是活靶子，绝对秒开)
+      - name: 📦 安装核心依赖库 (包含防反爬核武器)
         run: |
-          if [ ! -s target_ips.txt ]; then
-            echo "❌ 过滤后没有大厂 IP，提前终止"
-            exit 1
-          fi
-          # 因为全是活 IP，连 -p (并发限制) 都不需要设太低了
-          # -url 换回了更适合测可用性的目标
-          ./cfst -f target_ips.txt -tp 443 -url https://www.google.com -n 10 -sl 1 -tl 250 -dn 10 -o result.csv
+          python -m pip install --upgrade pip
+          pip install requests curl_cffi
 
-      - name: 4. 提取最优节点
-        run: |
-          if [ ! -f result.csv ]; then exit 1; fi
-          awk -F, 'NR>1 {
-            ip=$1
-            if (ip ~ /:/) printf("[%s]:443\n", ip)
-            else printf("%s:443\n", ip)
-          }' result.csv | head -n 10 > best.txt
-
-      - name: 5. 推送至 Gist
+      - name: ⚡ 运行终极聚合提纯脚本
         env:
           GIST_ID: ${{ secrets.GIST_ID }}
           GIST_PAT: ${{ secrets.GIST_PAT }}
-        run: |
-          if [ -s best.txt ]; then
-            TIME=$(date '+%Y-%m-%d %H:%M:%S')
-            echo "# Smart API Fetch (Pure Cloud Proxy) - $TIME" > final.txt
-            cat best.txt >> final.txt
-            CONTENT=$(sed ':a;N;$!ba;s/\n/\\n/g' final.txt)
-            curl -L -X PATCH -H "Authorization: token $GIST_PAT" -H "Accept: application/vnd.github+json" https://api.github.com/gists/$GIST_ID -d "{\"files\":{\"my_best_cf_ips.txt\":{\"content\":\"$CONTENT\"}}}"
-            echo "✅ 大厂 IP 测速完成，并已推送到 Gist！"
-          else
-            echo "❌ 最终未找到达标的节点"
-            exit 1
-          fi
+        run: python main.py
