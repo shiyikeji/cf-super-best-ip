@@ -34,8 +34,6 @@ WETEST_URLS = [
 
 # 🕵️‍♂️ 终极“熟肉”大厂矿源 (绝无 403 拦截，全是家庭宽带扫出的大厂节点)
 PROXY_SOURCES = [
-    "https://raw.githubusercontent.com/ymyuuu/IPDB/main/bestproxy.txt",
-    "https://raw.githubusercontent.com/ymyuuu/IPDB/main/proxy.txt"
 ]
 
 COLO_MAP = {
