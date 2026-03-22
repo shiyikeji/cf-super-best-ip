@@ -16,7 +16,7 @@ GIST_PAT = os.environ.get('GIST_PAT')
 # ==============================================================================
 # 核心配置区
 # ==============================================================================
-# 🎯 你的专属暗号 (必填！作为试金石，筛选出真正包容、无私的透明反代)
+# 🎯 你的专属暗号 (作为试金石)
 YOUR_SNI = "hk.lingqiu.eu.org"
 
 # 🌟 官方优选 IP 数据源
@@ -32,7 +32,7 @@ WETEST_URLS = [
     "https://www.wetest.vip/page/cloudflare/address_v6.html"
 ]
 
-# 🕵️‍♂️ 终极“熟肉”大厂矿源 (全网每天最新扫出的甲骨文/AWS/DO等生肉，几万个IP)
+# 🕵️‍♂️ 终极“熟肉”大厂矿源
 PROXY_SOURCES = [
     "https://raw.githubusercontent.com/ymyuuu/IPDB/main/bestproxy.txt",
     "https://raw.githubusercontent.com/ymyuuu/IPDB/main/proxy.txt"
@@ -62,7 +62,6 @@ def check_proxy_sni(ip_port):
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE 
         with socket.create_connection((ip, port), timeout=2.5) as sock:
-            # ✨ 核心：强行塞入你的域名进行 TLS 握手
             with ctx.wrap_socket(sock, server_hostname=YOUR_SNI) as ssock:
                 req = f"GET / HTTP/1.1\r\nHost: {YOUR_SNI}\r\nUser-Agent: Mozilla/5.0\r\n\r\n"
                 ssock.sendall(req.encode())
@@ -134,9 +133,13 @@ def fetch_ips():
             print(f"\n🕸️ 正在拉取全网反代大厂生肉矿渣: {url}")
             res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=15)
             if res.status_code == 200:
-                # 暴力提取所有 IP:端口，无视原有的无用备注
-                raw_ips = re.findall(r'\b(?:\d{1,3}\.){3}\d{1,3}:\d+\b', res.text)
-                proxy_candidates.update(raw_ips)
+                # ✨ 核心修复：兼容纯 IP 格式，没端口的自动补齐 443 端口！
+                raw_matches = re.findall(r'\b(?:\d{1,3}\.){3}\d{1,3}(?::\d+)?\b', res.text)
+                for match in raw_matches:
+                    if ':' not in match:
+                        proxy_candidates.add(f"{match}:443")
+                    else:
+                        proxy_candidates.add(match)
         except Exception as e:
             print(f"拉取反代源失败: {e}")
 
@@ -186,7 +189,6 @@ def fetch_ips():
     final_ips = set()
     country_proxy_counter = defaultdict(int)
 
-    # 5.1 处理官方库和 WeTest 数据 (不占用反代限额)
     for item in all_ips:
         ip_port, remark = item.split('#', 1)
         if remark in ["❄️冷库", "Auto", "Auto-QD"]:
@@ -207,7 +209,6 @@ def fetch_ips():
         else:
             final_ips.add(item)
 
-    # 5.2 处理反代数据，每个大厂国家严格限制只保留 5 个
     for item in sorted(list(temp_valid_proxy_list)): 
         ip_port, remark = item.split('#', 1)
         ip = ip_port.rsplit(':', 1)[0].strip('[]')
