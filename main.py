@@ -5,19 +5,18 @@ import re
 import socket
 import ssl
 import concurrent.futures
-import time
-import random
 from collections import defaultdict
-from curl_cffi import requests as cffi_requests # ✨ 终极破盾核武器
+
+# ==============================================================================
+# 获取 GitHub Secrets 密钥
+# ==============================================================================
+GIST_ID = os.environ.get('GIST_ID')
+GIST_PAT = os.environ.get('GIST_PAT')
 
 # ==============================================================================
 # 核心配置区
 # ==============================================================================
-# 从系统环境变量获取 GitHub Secrets (部署到 Actions 时会自动读取)
-GIST_ID = os.environ.get('GIST_ID')
-GIST_PAT = os.environ.get('GIST_PAT')
-
-# 🎯 你的专属暗号 (必填！脚本会用它去检验反代 IP 的纯度)
+# 🎯 你的专属暗号 (必填！作为试金石，筛选出真正包容、无私的透明反代)
 YOUR_SNI = "hk.lingqiu.eu.org"
 
 # 🌟 官方优选 IP 数据源
@@ -31,6 +30,12 @@ SOURCES = [
 WETEST_URLS = [
     "https://www.wetest.vip/page/cloudflare/address_v4.html",
     "https://www.wetest.vip/page/cloudflare/address_v6.html"
+]
+
+# 🕵️‍♂️ 终极“熟肉”大厂矿源 (全网每天最新扫出的甲骨文/AWS/DO等生肉，几万个IP)
+PROXY_SOURCES = [
+    "https://raw.githubusercontent.com/ymyuuu/IPDB/main/bestproxy.txt",
+    "https://raw.githubusercontent.com/ymyuuu/IPDB/main/proxy.txt"
 ]
 
 COLO_MAP = {
@@ -57,6 +62,7 @@ def check_proxy_sni(ip_port):
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE 
         with socket.create_connection((ip, port), timeout=2.5) as sock:
+            # ✨ 核心：强行塞入你的域名进行 TLS 握手
             with ctx.wrap_socket(sock, server_hostname=YOUR_SNI) as ssock:
                 req = f"GET / HTTP/1.1\r\nHost: {YOUR_SNI}\r\nUser-Agent: Mozilla/5.0\r\n\r\n"
                 ssock.sendall(req.encode())
@@ -67,27 +73,6 @@ def check_proxy_sni(ip_port):
         pass
     return None
 
-# 🕸️ 终极破盾版：QZZ 全站爬虫 (curl_cffi 伪装指纹 + 随机延迟)
-def fetch_qzz_page(page):
-    try:
-        url = f"https://proxyip.chatkg.qzz.io/?page={page}" if page > 1 else "https://proxyip.chatkg.qzz.io/"
-        
-        # 随机停顿，防止触发高频拦截
-        time.sleep(random.uniform(1.0, 2.5))
-        
-        # ✨ 核心保护：impersonate="chrome110" 完美伪装真实浏览器指纹，破解 403！
-        r = cffi_requests.get(url, impersonate="chrome110", timeout=15)
-        
-        if r.status_code == 200:
-            matches = re.findall(r'<td>\s*(\d{1,3}(?:\.\d{1,3}){3})\s*</td>\s*<td>\s*(\d+)\s*</td>', r.text)
-            return [f"{ip}:{port}" for ip, port in matches]
-        elif r.status_code in [403, 429]:
-            print(f"⚠️ 第 {page} 页触发了反爬拦截 (状态码: {r.status_code})")
-    except Exception as e:
-        pass
-    return []
-
-# 主逻辑抓取整合
 def fetch_ips():
     all_ips = set()
     ip_pattern = re.compile(r'^(\[[0-9a-fA-F:]+\]|\d{1,3}(?:\.\d{1,3}){3})(?::(\d+))?(?:#(.*))?$')
@@ -142,27 +127,28 @@ def fetch_ips():
         except Exception:
             pass
 
-    # ================== 3. 💥 究极淘金：防拦截指纹伪装爬虫 ==================
+    # ================== 3. 💥 究极淘金：拉取生肉矿源 + 并发对暗号 ==================
     proxy_candidates = set()
-    print("\n🕸️ 启动 QZZ 全站反代爬虫 (启用 curl_cffi 浏览器指纹欺骗，限速 3 线程)...")
-    
-    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
-        pages_results = executor.map(fetch_qzz_page, range(1, 134))
-        for page_ips in pages_results:
-            if page_ips:
-                proxy_candidates.update(page_ips)
-                
-    print(f"✅ QZZ 全站抓取完毕！共吸入 {len(proxy_candidates)} 个待测矿渣 IP。")
+    for url in PROXY_SOURCES:
+        try:
+            print(f"\n🕸️ 正在拉取全网反代大厂生肉矿渣: {url}")
+            res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=15)
+            if res.status_code == 200:
+                # 暴力提取所有 IP:端口，无视原有的无用备注
+                raw_ips = re.findall(r'\b(?:\d{1,3}\.){3}\d{1,3}:\d+\b', res.text)
+                proxy_candidates.update(raw_ips)
+        except Exception as e:
+            print(f"拉取反代源失败: {e}")
 
     valid_proxies = []
     if proxy_candidates:
-        print(f"🔍 开启 50 线程疯狂质检暗号中，淘汰死节点和自私节点...")
+        print(f"🔍 成功吸入 {len(proxy_candidates)} 个矿渣！开启 50 线程疯狂质检暗号中...")
         with concurrent.futures.ThreadPoolExecutor(max_workers=50) as executor:
             results = executor.map(check_proxy_sni, proxy_candidates)
             for result in results:
                 if result:
                     valid_proxies.append(result)
-        print(f"💎 淘金完毕！共有 {len(valid_proxies)} 个绝品 IP 暗号正确！")
+        print(f"💎 淘金完毕！共有 {len(valid_proxies)} 个大厂绝品 IP 对上了你的暗号！")
 
     # ================== 4. 🌍 户口查验：为未知 IP 分配国旗 ==================
     temp_valid_proxy_list = set()
@@ -200,7 +186,7 @@ def fetch_ips():
     final_ips = set()
     country_proxy_counter = defaultdict(int)
 
-    # 5.1 处理不需要受限的官方库和 WeTest 数据
+    # 5.1 处理官方库和 WeTest 数据 (不占用反代限额)
     for item in all_ips:
         ip_port, remark = item.split('#', 1)
         if remark in ["❄️冷库", "Auto", "Auto-QD"]:
@@ -221,7 +207,7 @@ def fetch_ips():
         else:
             final_ips.add(item)
 
-    # 5.2 处理反代数据，每个国家严格限制只保留 5 个
+    # 5.2 处理反代数据，每个大厂国家严格限制只保留 5 个
     for item in sorted(list(temp_valid_proxy_list)): 
         ip_port, remark = item.split('#', 1)
         ip = ip_port.rsplit(':', 1)[0].strip('[]')
